@@ -13,6 +13,7 @@ import csv
 import json
 import re
 import sys
+import urllib.parse
 from html import unescape
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -147,6 +148,9 @@ TITLE_PATTERN = re.compile(r"<title>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 TITLE_SUFFIX = " - YouTube"
 
 
+INVALID_FS_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+
+
 def fetch_video_title(downloader: YoutubeCommentDownloader, url: str) -> Optional[str]:
     """Fetch and clean the page title for the given YouTube URL."""
     try:
@@ -171,6 +175,30 @@ def fetch_video_title(downloader: YoutubeCommentDownloader, url: str) -> Optiona
     if title.lower().endswith(TITLE_SUFFIX.lower()):
         title = title[: -len(TITLE_SUFFIX)].rstrip()
     return title or None
+
+
+def sanitize_directory_name(name: str) -> str:
+    """Return a filesystem-friendly directory name derived from the provided string."""
+    sanitized = INVALID_FS_CHARS.sub("_", name).strip("._ ")
+    return sanitized[:80] or "video"
+
+
+def extract_video_id(url: str) -> Optional[str]:
+    """Extract the YouTube video ID from a variety of common URL formats."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.hostname in {"youtu.be"}:
+        video_id = parsed.path.lstrip("/")
+        return video_id or None
+    if parsed.hostname and "youtube" in parsed.hostname:
+        query = urllib.parse.parse_qs(parsed.query)
+        video_id = query.get("v", [""])[0]
+        if video_id:
+            return video_id
+        if parsed.path.startswith("/shorts/"):
+            segments = parsed.path.split("/", 2)
+            if len(segments) >= 3 and segments[2]:
+                return segments[2]
+    return None
 
 
 def _tokenize(query: str) -> List[tuple[str, bool]]:
@@ -384,14 +412,24 @@ def main() -> None:
 
     if video_title:
         print(f"\nVideo title: {video_title}")
+    else:
+        print("\nVideo title: (unknown)")
+
+    safe_dir_name = sanitize_directory_name(video_title) if video_title else None
+    if not safe_dir_name:
+        fallback_id = extract_video_id(url)
+        safe_dir_name = sanitize_directory_name(f"video_{fallback_id}") if fallback_id else "video"
+
+    output_dir = Path.cwd() / safe_dir_name
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     flat_rows = flatten_comments(comment_threads)
-    json_path = Path.cwd() / "comments.json"
-    csv_path = Path.cwd() / "comments.csv"
+    json_path = output_dir / "comments.json"
+    csv_path = output_dir / "comments.csv"
 
     save_json(comment_threads, json_path)
     save_csv(flat_rows, csv_path)
-    print(f"\nSaved {len(flat_rows)} comments to {json_path.name} and {csv_path.name}.")
+    print(f"\nSaved {len(flat_rows)} comments to {json_path} and {csv_path}.")
 
     search_performed = bool(query)
     matches: List[Dict[str, Any]] = []
