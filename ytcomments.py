@@ -21,7 +21,11 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 import requests
 
 from youtube_comment_downloader import YoutubeCommentDownloader, SORT_BY_RECENT
-from youtube_comment_downloader.downloader import YOUTUBE_CONSENT_URL, YT_HIDDEN_INPUT_RE
+from youtube_comment_downloader.downloader import (
+    YOUTUBE_CONSENT_URL,
+    YT_HIDDEN_INPUT_RE,
+    YT_INITIAL_DATA_RE,
+)
 
 COMMENT_ID_KEYS = ("comment_id", "cid", "id")
 AUTHOR_KEYS = ("author", "author_text", "username", "user", "channel")
@@ -106,10 +110,10 @@ def normalize_comment(raw_comment: Dict[str, Any], parent_id: Optional[str] = No
     }
 
 
-def download_comment_threads(url: str) -> Tuple[Optional[str], List[Dict[str, Any]]]:
-    """Fetch the video title and top-level comments (with replies) for the supplied URL."""
+def download_comment_threads(url: str) -> Tuple[Optional[str], Optional[int], List[Dict[str, Any]]]:
+    """Fetch video metadata and all top-level comments (with replies) for the URL."""
     downloader = YoutubeCommentDownloader()
-    title = fetch_video_title(downloader, url)
+    title, comment_count = fetch_video_metadata(downloader, url)
     try:
         comment_iter = downloader.get_comments_from_url(url, sort_by=SORT_BY_RECENT)
     except Exception as exc:  # pragma: no cover - library/network errors
@@ -118,30 +122,26 @@ def download_comment_threads(url: str) -> Tuple[Optional[str], List[Dict[str, An
     threads: List[Dict[str, Any]] = []
     for raw_comment in comment_iter:
         threads.append(normalize_comment(raw_comment))
-    return title, threads
+    return title, comment_count, threads
 
 
-def flatten_comments(comments: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Flatten nested comment threads into a list suitable for CSV export."""
-    rows: List[Dict[str, Any]] = []
+def iter_flatten_comments(comments: Iterable[Dict[str, Any]]) -> Iterable[Dict[str, Any]]:
+    """Yield flattened comment rows (including replies) one by one."""
 
-    def _walk(comment: Dict[str, Any]) -> None:
-        rows.append(
-            {
-                "comment_id": comment.get("comment_id", ""),
-                "parent_id": comment.get("parent_id") or "",
-                "author": comment.get("author", ""),
-                "comment_text": comment.get("comment_text", ""),
-                "like_count": comment.get("like_count", 0),
-                "published_at": comment.get("published_at", ""),
-            }
-        )
+    def _walk(comment: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
+        yield {
+            "comment_id": comment.get("comment_id", ""),
+            "parent_id": comment.get("parent_id") or "",
+            "author": comment.get("author", ""),
+            "comment_text": comment.get("comment_text", ""),
+            "like_count": comment.get("like_count", 0),
+            "published_at": comment.get("published_at", ""),
+        }
         for reply in comment.get("replies", []):
-            _walk(reply)
+            yield from _walk(reply)
 
     for comment in comments:
-        _walk(comment)
-    return rows
+        yield from _walk(comment)
 
 
 TITLE_PATTERN = re.compile(r"<title>(.*?)</title>", re.IGNORECASE | re.DOTALL)
@@ -151,12 +151,14 @@ TITLE_SUFFIX = " - YouTube"
 INVALID_FS_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
 
-def fetch_video_title(downloader: YoutubeCommentDownloader, url: str) -> Optional[str]:
-    """Fetch and clean the page title for the given YouTube URL."""
+def fetch_video_metadata(
+    downloader: YoutubeCommentDownloader, url: str
+) -> Tuple[Optional[str], Optional[int]]:
+    """Return the video title and reported comment count (if available)."""
     try:
         response = downloader.session.get(url)
     except requests.RequestException:
-        return None
+        return None, None
 
     if "consent" in str(response.url):
         params = dict(re.findall(YT_HIDDEN_INPUT_RE, response.text))
@@ -164,17 +166,40 @@ def fetch_video_title(downloader: YoutubeCommentDownloader, url: str) -> Optiona
         try:
             response = downloader.session.post(YOUTUBE_CONSENT_URL, params=params)
         except requests.RequestException:
-            return None
+            return None, None
 
     html = response.text
     match = TITLE_PATTERN.search(html)
-    if not match:
-        return None
+    title: Optional[str] = None
+    if match:
+        title = unescape(match.group(1)).strip()
+        if title.lower().endswith(TITLE_SUFFIX.lower()):
+            title = title[: -len(TITLE_SUFFIX)].rstrip()
+        if not title:
+            title = None
 
-    title = unescape(match.group(1)).strip()
-    if title.lower().endswith(TITLE_SUFFIX.lower()):
-        title = title[: -len(TITLE_SUFFIX)].rstrip()
-    return title or None
+    comment_count: Optional[int] = None
+    initial_data_raw = downloader.regex_search(html, YT_INITIAL_DATA_RE, default="")
+    if initial_data_raw:
+        try:
+            initial_data = json.loads(initial_data_raw)
+        except json.JSONDecodeError:
+            initial_data = {}
+        if isinstance(initial_data, dict):  # defensive
+            for count_text in downloader.search_dict(initial_data, "countText"):
+                text = None
+                if isinstance(count_text, dict):
+                    if "simpleText" in count_text:
+                        text = count_text.get("simpleText")
+                    elif "runs" in count_text:
+                        text = "".join(part.get("text", "") for part in count_text.get("runs", []))
+                if text and "comment" in text.lower():
+                    digits = "".join(ch for ch in text if ch.isdigit())
+                    if digits:
+                        comment_count = int(digits)
+                        break
+
+    return title, comment_count
 
 
 def sanitize_directory_name(name: str) -> str:
@@ -419,7 +444,7 @@ def main() -> None:
         query = ""
 
     try:
-        video_title, comment_threads = download_comment_threads(url)
+        video_title, reported_comment_count, comment_threads = download_comment_threads(url)
     except RuntimeError as exc:
         print(exc, file=sys.stderr)
         sys.exit(1)
@@ -436,6 +461,8 @@ def main() -> None:
         title_line = "Video title: (unknown)"
         print(f"\n{title_line}")
     report_lines.append(title_line)
+    if reported_comment_count is not None:
+        report_lines.append(f"Reported comment count: {reported_comment_count}")
 
     safe_dir_name = sanitize_directory_name(video_title) if video_title else None
     if not safe_dir_name:
@@ -447,14 +474,45 @@ def main() -> None:
 
     report_lines.append(f"Output directory: {output_dir}")
 
-    flat_rows = flatten_comments(comment_threads)
     json_path = output_dir / "comments.json"
     csv_path = output_dir / "comments.csv"
 
+    flat_rows: List[Dict[str, Any]] = []
+    total_known = reported_comment_count if reported_comment_count and reported_comment_count > 0 else None
+    processed = 0
+    progress_line = "Processing comments: 0"
+    with csv_path.open("w", encoding="utf-8", newline="") as csvfile:
+        fieldnames = ["comment_id", "parent_id", "author", "comment_text", "like_count", "published_at"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for row in iter_flatten_comments(comment_threads):
+            flat_rows.append(row)
+            writer.writerow(row)
+            processed += 1
+            if processed % 100 == 0 or (total_known and processed == total_known):
+                if total_known:
+                    percent = processed / total_known * 100
+                    progress_line = f"Processing comments: {processed}/{total_known} ({percent:.1f}%)"
+                else:
+                    progress_line = f"Processing comments: {processed}"
+                print(f"\r{progress_line}", end="", flush=True)
+
+    if processed:
+        if total_known and processed != total_known:
+            percent = processed / total_known * 100
+            progress_line = f"Processing comments: {processed}/{total_known} ({percent:.1f}%)"
+        else:
+            progress_line = f"Processing comments: {processed}" if processed else "Processing comments: 0"
+        print(f"\r{progress_line}")
+        report_lines.append(progress_line)
+    else:
+        print("\rProcessing comments: 0")
+        report_lines.append("Processing comments: 0")
+
     save_json(comment_threads, json_path)
-    save_csv(flat_rows, csv_path)
-    save_line = f"Saved {len(flat_rows)} comments to {json_path} and {csv_path}."
-    print(f"\n{save_line}")
+    save_line = f"Saved {processed} comments to {json_path} and {csv_path}."
+    print(save_line)
     report_lines.append(save_line)
 
     search_performed = bool(query)
@@ -470,7 +528,7 @@ def main() -> None:
     if search_performed:
         print_matches(matches, collector=report_lines)
 
-    total_line = f"Total comments downloaded: {len(flat_rows)}"
+    total_line = f"Total comments downloaded: {processed}"
     print(f"\n{total_line}")
     report_lines.append("")
     report_lines.append(total_line)
