@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import json
+import shlex
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -138,8 +139,11 @@ def flatten_comments(comments: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]
 
 
 def keyword_search(rows: Iterable[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
-    """Return comments containing every keyword (case-insensitive) from the query string."""
-    terms = [term.lower() for term in query.split() if term.strip()]
+    """Return comments containing every keyword/phrase (case-insensitive) from the query string."""
+    try:
+        terms = [term.lower() for term in shlex.split(query) if term.strip()]
+    except ValueError:
+        terms = [term.lower() for term in query.split() if term.strip()]
     if not terms:
         return []
     matches: List[Dict[str, Any]] = []
@@ -206,7 +210,7 @@ def main() -> None:
     print(f"\nSaved {len(flat_rows)} comments to {json_path.name} and {csv_path.name}.")
 
     try:
-        query = input("Enter keyword(s) separated by spaces (leave blank to skip search): ").strip()
+        query = input("Enter keyword(s) separated by spaces (use quotes for phrases, leave blank to skip search): ").strip()
     except (EOFError, KeyboardInterrupt):
         print("\nKeyword search skipped.")
         query = ""
