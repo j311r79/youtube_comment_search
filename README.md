@@ -38,6 +38,7 @@ Outputs:
 - `<title>/comments.json` – full nested comment threads, including replies.
 - `<title>/comments.csv` – flattened rows (one per comment or reply) streamed to disk while a progress bar tracks completion.
 - `<title>/search_<keywords>.txt` – summary of the search results (if a query was entered).
+- After completion `ytcomments.py` switches the current working directory to the new output folder, making it easy to run `ytsearch.py` immediately.
 
 ### Search previously saved comments
 

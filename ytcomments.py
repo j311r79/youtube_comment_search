@@ -10,6 +10,7 @@ Requires:
 from __future__ import annotations
 
 import csv
+import os
 import json
 import re
 import sys
@@ -551,6 +552,12 @@ def main() -> None:
         log_path = output_dir / f"search_{slug}.txt"
         log_path.write_text("\n".join(report_lines), encoding="utf-8")
         print(f"Saved search log to {log_path}")
+
+    try:
+        os.chdir(output_dir)
+        print(f"\nChanged working directory to {output_dir}")
+    except OSError as err:
+        print(f"\nCould not change directory to {output_dir}: {err}")
 
 
 if __name__ == "__main__":
