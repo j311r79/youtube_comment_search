@@ -504,7 +504,7 @@ def display_lines_paged(lines: List[str]) -> None:
             break
 
         try:
-            response = input("--More-- (Enter to continue, q to quit) ").strip().lower()
+            response = input("--More-- (press Enter for next page, q to cancel paging) ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
             return
