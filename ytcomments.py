@@ -121,8 +121,16 @@ def download_comment_threads(url: str) -> Tuple[Optional[str], Optional[int], Li
         raise RuntimeError(f"Failed to fetch comments: {exc}") from exc
 
     threads: List[Dict[str, Any]] = []
-    for raw_comment in comment_iter:
+    progress = tqdm(
+        comment_iter,
+        total=comment_count,
+        unit=" comments",
+        desc="Downloading",
+        dynamic_ncols=True,
+    )
+    for raw_comment in progress:
         threads.append(normalize_comment(raw_comment))
+    progress.close()
     return title, comment_count, threads
 
 
@@ -486,18 +494,19 @@ def main() -> None:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
-        progress = tqdm(
+        saver = tqdm(
             iter_flatten_comments(comment_threads),
             total=total_known,
-            unit="comment",
+            unit=" comments",
             desc="Saving",
             dynamic_ncols=True,
+            leave=False,
         )
-        for row in progress:
+        for row in saver:
             flat_rows.append(row)
             writer.writerow(row)
             processed += 1
-        progress.close()
+        saver.close()
 
     progress_summary = (
         f"Processed {processed}/{total_known} comments."
