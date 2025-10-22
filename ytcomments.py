@@ -183,6 +183,12 @@ def sanitize_directory_name(name: str) -> str:
     return sanitized[:80] or "video"
 
 
+def sanitize_for_filename(name: str, default: str = "search") -> str:
+    """Return a filesystem-safe slug suitable for filenames."""
+    sanitized = INVALID_FS_CHARS.sub("_", name).strip("._ ")
+    return sanitized[:80] or default
+
+
 def extract_video_id(url: str) -> Optional[str]:
     """Extract the YouTube video ID from a variety of common URL formats."""
     parsed = urllib.parse.urlparse(url)
@@ -369,18 +375,26 @@ def save_csv(rows: List[Dict[str, Any]], path: Path) -> None:
         writer.writerows(rows)
 
 
-def print_matches(matches: List[Dict[str, Any]]) -> None:
+def print_matches(matches: List[Dict[str, Any]], collector: Optional[List[str]] = None) -> None:
     """Display keyword matches with author and the full comment text."""
+
+    def emit(line: str = "") -> None:
+        if collector is not None:
+            collector.append(line)
+        print(line)
+
     if not matches:
-        print("\nNo comments matched the provided keywords.")
+        emit()
+        emit("No comments matched the provided keywords.")
         return
 
-    print("\nMatching comments:")
+    emit()
+    emit("Matching comments:")
     for match in matches:
         snippet = match.get("comment_text", "").strip().replace("\n", " ")
         author = match.get("author") or "Unknown"
         published = match.get("published_at") or "Unknown date"
-        print(f"- {author} [{published}]: {snippet}")
+        emit(f"- {author} [{published}]: {snippet}")
 
 
 def main() -> None:
@@ -410,10 +424,18 @@ def main() -> None:
         print(exc, file=sys.stderr)
         sys.exit(1)
 
+    report_lines: List[str] = [
+        "YouTube Comment Downloader",
+        f"Video URL: {url}",
+    ]
+
     if video_title:
-        print(f"\nVideo title: {video_title}")
+        title_line = f"Video title: {video_title}"
+        print(f"\n{title_line}")
     else:
-        print("\nVideo title: (unknown)")
+        title_line = "Video title: (unknown)"
+        print(f"\n{title_line}")
+    report_lines.append(title_line)
 
     safe_dir_name = sanitize_directory_name(video_title) if video_title else None
     if not safe_dir_name:
@@ -423,17 +445,22 @@ def main() -> None:
     output_dir = Path.cwd() / safe_dir_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    report_lines.append(f"Output directory: {output_dir}")
+
     flat_rows = flatten_comments(comment_threads)
     json_path = output_dir / "comments.json"
     csv_path = output_dir / "comments.csv"
 
     save_json(comment_threads, json_path)
     save_csv(flat_rows, csv_path)
-    print(f"\nSaved {len(flat_rows)} comments to {json_path} and {csv_path}.")
+    save_line = f"Saved {len(flat_rows)} comments to {json_path} and {csv_path}."
+    print(f"\n{save_line}")
+    report_lines.append(save_line)
 
     search_performed = bool(query)
     matches: List[Dict[str, Any]] = []
     if search_performed:
+        report_lines.append(f"Search query: {query}")
         try:
             matches = keyword_search(flat_rows, query)
         except ValueError as err:
@@ -441,15 +468,25 @@ def main() -> None:
             search_performed = False
 
     if search_performed:
-        print_matches(matches)
+        print_matches(matches, collector=report_lines)
 
-    print(f"\nTotal comments downloaded: {len(flat_rows)}")
-    if video_title:
-        print(f"Video title: {video_title}")
+    total_line = f"Total comments downloaded: {len(flat_rows)}"
+    print(f"\n{total_line}")
+    report_lines.append("")
+    report_lines.append(total_line)
     if search_performed:
-        print(f"Comments matching keywords: {len(matches)}")
+        matches_line = f"Comments matching keywords: {len(matches)}"
+        print(matches_line)
+        report_lines.append(matches_line)
     else:
         print("Keyword search skipped.")
+        report_lines.append("Keyword search skipped.")
+
+    if search_performed:
+        slug = sanitize_for_filename(query)
+        log_path = output_dir / f"search_{slug}.txt"
+        log_path.write_text("\n".join(report_lines), encoding="utf-8")
+        print(f"Saved search log to {log_path}")
 
 
 if __name__ == "__main__":
