@@ -196,6 +196,14 @@ def main() -> None:
         return
 
     try:
+        query = input(
+            "Enter keyword(s) separated by spaces (use quotes for phrases, leave blank to skip search): "
+        ).strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nKeyword search skipped.")
+        query = ""
+
+    try:
         comment_threads = download_comment_threads(url)
     except RuntimeError as exc:
         print(exc, file=sys.stderr)
@@ -208,12 +216,6 @@ def main() -> None:
     save_json(comment_threads, json_path)
     save_csv(flat_rows, csv_path)
     print(f"\nSaved {len(flat_rows)} comments to {json_path.name} and {csv_path.name}.")
-
-    try:
-        query = input("Enter keyword(s) separated by spaces (use quotes for phrases, leave blank to skip search): ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print("\nKeyword search skipped.")
-        query = ""
 
     matches = keyword_search(flat_rows, query) if query else []
     if query:
