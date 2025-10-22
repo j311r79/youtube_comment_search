@@ -14,7 +14,8 @@ This repo contains two command-line helpers for working with public YouTube comm
 ## Requirements
 
 - Python 3.8 or newer
-- `youtube-comment-downloader` package (`python3 -m pip install youtube-comment-downloader`)
+- `youtube-comment-downloader` (`python3 -m pip install youtube-comment-downloader`)
+- `tqdm` for the progress bar (`python3 -m pip install tqdm`)
 
 No YouTube API key is needed—the downloader scrapes public comment data.
 
@@ -35,7 +36,7 @@ You'll be prompted for:
 Outputs:
 
 - `<title>/comments.json` – full nested comment threads, including replies.
-- `<title>/comments.csv` – flattened rows (one per comment or reply).
+- `<title>/comments.csv` – flattened rows (one per comment or reply) streamed to disk while a progress bar tracks completion.
 - `<title>/search_<keywords>.txt` – summary of the search results (if a query was entered).
 
 ### Search previously saved comments
