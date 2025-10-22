@@ -52,8 +52,10 @@ Outputs:
 
    (adjust the path if the search script lives elsewhere.)
 
-3. Enter your boolean keyword expression when prompted; results print to the
-   console and a `search_<keywords>.txt` log is generated.
+3. Enter your boolean keyword expression when prompted; results print via the
+   pager and a `search_<keywords>.txt` log is generated. After the initial
+   results you can continue entering new searches with the same paging
+   experience as `ytcomments.py`.
 
 ## Boolean search syntax
 

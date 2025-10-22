@@ -12,7 +12,12 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
-from ytcomments import keyword_search, print_matches, sanitize_for_filename
+from ytcomments import (
+    interactive_search,
+    keyword_search,
+    print_matches,
+    sanitize_for_filename,
+)
 
 COMMENTS_FILENAME = "comments.csv"
 
@@ -93,6 +98,8 @@ def main() -> None:
         log_path = csv_path.parent / f"search_{slug}.txt"
         log_path.write_text("\n".join(report_lines), encoding="utf-8")
         print(f"Saved search log to {log_path}")
+
+    interactive_search(flat_rows, csv_path.parent, len(flat_rows))
 
 
 if __name__ == "__main__":
