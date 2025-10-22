@@ -480,8 +480,7 @@ def print_matches(matches: List[Dict[str, Any]], collector: Optional[List[str]] 
         collector.extend(lines)
 
     print()
-    for line in lines:
-        print(line)
+    display_lines_paged(lines)
 
 
 def display_lines_paged(lines: List[str]) -> None:
