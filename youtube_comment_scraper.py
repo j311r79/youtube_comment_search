@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Download all public comments from a YouTube video, save them locally, and
-search them for keywords.
+search them for keywords (supports quoted phrases plus AND/OR with parentheses).
 
 Requires:
     pip install youtube-comment-downloader
@@ -11,10 +11,9 @@ from __future__ import annotations
 
 import csv
 import json
-import shlex
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 from youtube_comment_downloader import YoutubeCommentDownloader, SORT_BY_RECENT
 
@@ -138,20 +137,158 @@ def flatten_comments(comments: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]
     return rows
 
 
+def _tokenize(query: str) -> List[tuple[str, bool]]:
+    """Split the query into tokens, keeping quoted phrases intact."""
+    tokens: List[tuple[str, bool]] = []
+    i = 0
+    length = len(query)
+    while i < length:
+        ch = query[i]
+        if ch.isspace():
+            i += 1
+            continue
+        if ch in "()":
+            tokens.append((ch, False))
+            i += 1
+            continue
+        if ch == '"':
+            i += 1
+            start = i
+            while i < length and query[i] != '"':
+                i += 1
+            if i >= length:
+                raise ValueError("Unterminated quote in expression.")
+            tokens.append((query[start:i], True))
+            i += 1  # Skip closing quote
+            continue
+        start = i
+        while i < length and not query[i].isspace() and query[i] not in '()"':
+            i += 1
+        tokens.append((query[start:i], False))
+    return tokens
+
+
+class _Node:
+    def evaluate(self, row_text: List[str], cache: Dict[str, Set[int]]) -> Set[int]:
+        raise NotImplementedError
+
+
+class _TermNode(_Node):
+    def __init__(self, term: str) -> None:
+        self.term = term
+
+    def evaluate(self, row_text: List[str], cache: Dict[str, Set[int]]) -> Set[int]:
+        if self.term not in cache:
+            cache[self.term] = {idx for idx, text in enumerate(row_text) if self.term in text}
+        return cache[self.term]
+
+
+class _BinaryNode(_Node):
+    def __init__(self, operator: str, left: _Node, right: _Node) -> None:
+        self.operator = operator
+        self.left = left
+        self.right = right
+
+    def evaluate(self, row_text: List[str], cache: Dict[str, Set[int]]) -> Set[int]:
+        left_set = self.left.evaluate(row_text, cache)
+        right_set = self.right.evaluate(row_text, cache)
+        return left_set & right_set if self.operator == "AND" else left_set | right_set
+
+
+class _BooleanParser:
+    def __init__(self, tokens: List[tuple[str, bool]]) -> None:
+        self.tokens = tokens
+        self.pos = 0
+
+    def parse_expression(self) -> _Node:
+        node = self.parse_conjunction()
+        while self._match_operator("OR"):
+            rhs = self.parse_conjunction()
+            node = _BinaryNode("OR", node, rhs)
+        return node
+
+    def parse_conjunction(self) -> _Node:
+        node = self.parse_factor()
+        while True:
+            if self._match_operator("AND"):
+                rhs = self.parse_factor()
+                node = _BinaryNode("AND", node, rhs)
+            elif self._next_starts_factor():
+                rhs = self.parse_factor()
+                node = _BinaryNode("AND", node, rhs)
+            else:
+                break
+        return node
+
+    def parse_factor(self) -> _Node:
+        token = self._peek()
+        if token is None:
+            raise ValueError("Expression cannot end with an operator.")
+        text, quoted = token
+        if not quoted:
+            upper = text.upper()
+            if upper == "AND" or upper == "OR":
+                raise ValueError("Expression cannot contain consecutive operators.")
+            if text == ")":
+                raise ValueError("Expression contains unmatched closing parenthesis.")
+            if text == "(":
+                self._consume()
+                node = self.parse_expression()
+                if not self._match_paren(")"):
+                    raise ValueError("Expression contains unmatched opening parenthesis.")
+                return node
+        self._consume()
+        term = text.lower()
+        return _TermNode(term)
+
+    def _match_operator(self, operator: str) -> bool:
+        token = self._peek()
+        if token and not token[1] and token[0].upper() == operator:
+            self._consume()
+            return True
+        return False
+
+    def _match_paren(self, paren: str) -> bool:
+        token = self._peek()
+        if token and not token[1] and token[0] == paren:
+            self._consume()
+            return True
+        return False
+
+    def _next_starts_factor(self) -> bool:
+        token = self._peek()
+        if token is None:
+            return False
+        text, quoted = token
+        if not quoted:
+            upper = text.upper()
+            if upper in {"AND", "OR"} or text == ")":
+                return False
+        return True
+
+    def _peek(self) -> Optional[tuple[str, bool]]:
+        if self.pos >= len(self.tokens):
+            return None
+        return self.tokens[self.pos]
+
+    def _consume(self) -> None:
+        self.pos += 1
+
+
 def keyword_search(rows: Iterable[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
-    """Return comments containing every keyword/phrase (case-insensitive) from the query string."""
-    try:
-        terms = [term.lower() for term in shlex.split(query) if term.strip()]
-    except ValueError:
-        terms = [term.lower() for term in query.split() if term.strip()]
-    if not terms:
+    """Return comments that satisfy the AND/OR expression built from the query string."""
+    tokens = _tokenize(query)
+    if not tokens:
         return []
-    matches: List[Dict[str, Any]] = []
-    for row in rows:
-        text_lower = row.get("comment_text", "").lower()
-        if all(term in text_lower for term in terms):
-            matches.append(row)
-    return matches
+    parser = _BooleanParser(tokens)
+    root = parser.parse_expression()
+    if parser._peek() is not None:
+        raise ValueError("Malformed keyword expression.")
+
+    row_text = [str(row.get("comment_text", "")).lower() for row in rows]
+    cache: Dict[str, Set[int]] = {}
+    matching_indices = root.evaluate(row_text, cache)
+    return [row for idx, row in enumerate(rows) if idx in matching_indices]
 
 
 def save_json(comments: List[Dict[str, Any]], path: Path) -> None:
@@ -197,7 +334,7 @@ def main() -> None:
 
     try:
         query = input(
-            "Enter keyword(s) separated by spaces (use quotes for phrases, leave blank to skip search): "
+            "Enter keywords with AND/OR (use quotes for phrases, parentheses allowed, leave blank to skip search): "
         ).strip()
     except (EOFError, KeyboardInterrupt):
         print("\nKeyword search skipped.")
@@ -217,12 +354,20 @@ def main() -> None:
     save_csv(flat_rows, csv_path)
     print(f"\nSaved {len(flat_rows)} comments to {json_path.name} and {csv_path.name}.")
 
-    matches = keyword_search(flat_rows, query) if query else []
-    if query:
+    search_performed = bool(query)
+    matches: List[Dict[str, Any]] = []
+    if search_performed:
+        try:
+            matches = keyword_search(flat_rows, query)
+        except ValueError as err:
+            print(f"\nKeyword search error: {err}")
+            search_performed = False
+
+    if search_performed:
         print_matches(matches)
 
     print(f"\nTotal comments downloaded: {len(flat_rows)}")
-    if query:
+    if search_performed:
         print(f"Comments matching keywords: {len(matches)}")
     else:
         print("Keyword search skipped.")
