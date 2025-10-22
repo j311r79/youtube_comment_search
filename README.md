@@ -39,6 +39,7 @@ Outputs:
 - `<title>/comments.csv` – flattened rows (one per comment or reply) streamed to disk while a progress bar tracks completion.
 - `<title>/search_<keywords>.txt` – summary of the search results (if a query was entered).
 - After completion `ytcomments.py` offers additional searches with a simple pager; each follow-up query displays page by page and writes its own `search_<keywords>.txt` log.
+  - Set the `YT_PAGER_LINES` environment variable to control how many rows are shown per page (defaults to a heuristic based on terminal height, capped at 25 lines).
 
 ### Search previously saved comments
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import re
 import sys
 import urllib.parse
@@ -489,7 +490,14 @@ def display_lines_paged(lines: List[str]) -> None:
         return
 
     size = shutil.get_terminal_size(fallback=(80, 24))
-    page_size = max(size.lines - 2, 1)
+    env_override = os.getenv("YT_PAGER_LINES")
+    if env_override:
+        try:
+            page_size = max(int(env_override), 1)
+        except ValueError:
+            page_size = max(size.lines - 2, 1)
+    else:
+        page_size = max(min(size.lines - 2, 25), 5)
     index = 0
     total = len(lines)
 
