@@ -1,0 +1,6 @@
+# Generated comment exports (per-video output directories and flat files)
+youtube_comment_scraper/*.csv
+youtube_comment_scraper/*.json
+youtube_comment_scraper/*/
+!youtube_comment_scraper/First\ Run/
+!youtube_comment_scraper/Version_2_Is_Gone_Starship_V3_Begins_NOW_Starbase_Update/
