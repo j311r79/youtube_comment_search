@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import requests
+from tqdm import tqdm
 
 from youtube_comment_downloader import YoutubeCommentDownloader, SORT_BY_RECENT
 from youtube_comment_downloader.downloader import (
@@ -480,35 +481,31 @@ def main() -> None:
     flat_rows: List[Dict[str, Any]] = []
     total_known = reported_comment_count if reported_comment_count and reported_comment_count > 0 else None
     processed = 0
-    progress_line = "Processing comments: 0"
     with csv_path.open("w", encoding="utf-8", newline="") as csvfile:
         fieldnames = ["comment_id", "parent_id", "author", "comment_text", "like_count", "published_at"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
-        for row in iter_flatten_comments(comment_threads):
+        progress = tqdm(
+            iter_flatten_comments(comment_threads),
+            total=total_known,
+            unit="comment",
+            desc="Saving",
+            dynamic_ncols=True,
+        )
+        for row in progress:
             flat_rows.append(row)
             writer.writerow(row)
             processed += 1
-            if processed % 100 == 0 or (total_known and processed == total_known):
-                if total_known:
-                    percent = processed / total_known * 100
-                    progress_line = f"Processing comments: {processed}/{total_known} ({percent:.1f}%)"
-                else:
-                    progress_line = f"Processing comments: {processed}"
-                print(f"\r{progress_line}", end="", flush=True)
+        progress.close()
 
-    if processed:
-        if total_known and processed != total_known:
-            percent = processed / total_known * 100
-            progress_line = f"Processing comments: {processed}/{total_known} ({percent:.1f}%)"
-        else:
-            progress_line = f"Processing comments: {processed}" if processed else "Processing comments: 0"
-        print(f"\r{progress_line}")
-        report_lines.append(progress_line)
-    else:
-        print("\rProcessing comments: 0")
-        report_lines.append("Processing comments: 0")
+    progress_summary = (
+        f"Processed {processed}/{total_known} comments."
+        if total_known
+        else f"Processed {processed} comments."
+    )
+    print(progress_summary)
+    report_lines.append(progress_summary)
 
     save_json(comment_threads, json_path)
     save_line = f"Saved {processed} comments to {json_path} and {csv_path}."
