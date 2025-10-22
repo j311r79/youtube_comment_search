@@ -11,11 +11,16 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import sys
+from html import unescape
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+
+import requests
 
 from youtube_comment_downloader import YoutubeCommentDownloader, SORT_BY_RECENT
+from youtube_comment_downloader.downloader import YOUTUBE_CONSENT_URL, YT_HIDDEN_INPUT_RE
 
 COMMENT_ID_KEYS = ("comment_id", "cid", "id")
 AUTHOR_KEYS = ("author", "author_text", "username", "user", "channel")
@@ -100,9 +105,10 @@ def normalize_comment(raw_comment: Dict[str, Any], parent_id: Optional[str] = No
     }
 
 
-def download_comment_threads(url: str) -> List[Dict[str, Any]]:
-    """Fetch each top-level comment (with replies) for the supplied YouTube URL."""
+def download_comment_threads(url: str) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    """Fetch the video title and top-level comments (with replies) for the supplied URL."""
     downloader = YoutubeCommentDownloader()
+    title = fetch_video_title(downloader, url)
     try:
         comment_iter = downloader.get_comments_from_url(url, sort_by=SORT_BY_RECENT)
     except Exception as exc:  # pragma: no cover - library/network errors
@@ -111,7 +117,7 @@ def download_comment_threads(url: str) -> List[Dict[str, Any]]:
     threads: List[Dict[str, Any]] = []
     for raw_comment in comment_iter:
         threads.append(normalize_comment(raw_comment))
-    return threads
+    return title, threads
 
 
 def flatten_comments(comments: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -135,6 +141,36 @@ def flatten_comments(comments: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]
     for comment in comments:
         _walk(comment)
     return rows
+
+
+TITLE_PATTERN = re.compile(r"<title>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+TITLE_SUFFIX = " - YouTube"
+
+
+def fetch_video_title(downloader: YoutubeCommentDownloader, url: str) -> Optional[str]:
+    """Fetch and clean the page title for the given YouTube URL."""
+    try:
+        response = downloader.session.get(url)
+    except requests.RequestException:
+        return None
+
+    if "consent" in str(response.url):
+        params = dict(re.findall(YT_HIDDEN_INPUT_RE, response.text))
+        params.update({"continue": url, "set_eom": False, "set_ytc": True, "set_apyt": True})
+        try:
+            response = downloader.session.post(YOUTUBE_CONSENT_URL, params=params)
+        except requests.RequestException:
+            return None
+
+    html = response.text
+    match = TITLE_PATTERN.search(html)
+    if not match:
+        return None
+
+    title = unescape(match.group(1)).strip()
+    if title.lower().endswith(TITLE_SUFFIX.lower()):
+        title = title[: -len(TITLE_SUFFIX)].rstrip()
+    return title or None
 
 
 def _tokenize(query: str) -> List[tuple[str, bool]]:
@@ -341,10 +377,13 @@ def main() -> None:
         query = ""
 
     try:
-        comment_threads = download_comment_threads(url)
+        video_title, comment_threads = download_comment_threads(url)
     except RuntimeError as exc:
         print(exc, file=sys.stderr)
         sys.exit(1)
+
+    if video_title:
+        print(f"\nVideo title: {video_title}")
 
     flat_rows = flatten_comments(comment_threads)
     json_path = Path.cwd() / "comments.json"
@@ -367,6 +406,8 @@ def main() -> None:
         print_matches(matches)
 
     print(f"\nTotal comments downloaded: {len(flat_rows)}")
+    if video_title:
+        print(f"Video title: {video_title}")
     if search_performed:
         print(f"Comments matching keywords: {len(matches)}")
     else:
