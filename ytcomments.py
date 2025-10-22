@@ -484,25 +484,37 @@ def print_matches(matches: List[Dict[str, Any]], collector: Optional[List[str]] 
     display_lines_paged(lines)
 
 
-def display_lines_paged(lines: List[str]) -> None:
-    """Display lines with a simple prompt-based pager."""
-    if not lines:
-        return
-
+def _determine_page_size() -> int:
     size = shutil.get_terminal_size(fallback=(80, 24))
     env_override = os.getenv("YT_PAGER_LINES")
     if env_override:
         try:
-            page_size = max(int(env_override), 1)
+            value = int(env_override)
+            if value > 0:
+                return value
         except ValueError:
-            page_size = max(size.lines - 2, 1)
-    else:
-        page_size = max(min(size.lines - 2, 25), 5)
+            pass
+    usable_height = max(size.lines - 4, 5)
+    return min(usable_height, 40)
+
+
+def display_lines_paged(lines: List[str]) -> None:
+    """Display lines with a prompt-based pager that adapts to terminal height."""
+    if not lines:
+        return
+
     index = 0
     total = len(lines)
+    page = 1
 
     while index < total:
+        page_size = _determine_page_size()
+        if page_size <= 0:
+            page_size = 5
+
         chunk = lines[index : index + page_size]
+        header = f"-- Results {index + 1}-{index + len(chunk)} of {total} (page {page}) --"
+        print(header)
         for line in chunk:
             print(line)
         index += len(chunk)
@@ -511,13 +523,21 @@ def display_lines_paged(lines: List[str]) -> None:
             break
 
         try:
-            response = input("--More-- (press Enter for next page, q to cancel paging) ").strip().lower()
+            response = input(
+                "--More-- (Enter next page, b back, q stop) "
+            ).strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
             return
 
         if response.startswith("q"):
             break
+        if response.startswith("b"):
+            index = max(0, index - len(chunk) * 2)
+            page = max(1, page - 1)
+            continue
+
+        page += 1
 
 
 def main() -> None:
