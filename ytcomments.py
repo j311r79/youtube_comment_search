@@ -10,11 +10,11 @@ Requires:
 from __future__ import annotations
 
 import csv
-import os
 import json
 import re
 import sys
 import urllib.parse
+import shutil
 from html import unescape
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -242,6 +242,54 @@ def extract_video_id(url: str) -> Optional[str]:
     return None
 
 
+def interactive_search(flat_rows: List[Dict[str, Any]], output_dir: Path, total_comments: int) -> None:
+    """Allow the user to run additional searches with results displayed in a pager."""
+
+    if not flat_rows:
+        return
+
+    print("\nEnter additional searches (press Enter to exit).")
+    while True:
+        try:
+            query = input(
+                "New search (use quotes for phrases, parentheses allowed, blank to exit): "
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nExiting search pager.")
+            return
+
+        if not query:
+            print("Exiting search pager.")
+            return
+
+        try:
+            matches = keyword_search(flat_rows, query)
+        except ValueError as err:
+            print(f"Keyword search error: {err}")
+            continue
+
+        lines = format_matches(matches)
+        summary = [
+            "",
+            f"Total comments available: {total_comments}",
+            f"Comments matching keywords: {len(matches)}",
+        ]
+        display_lines_paged(lines + summary)
+
+        log_lines = [
+            "YouTube Comment Downloader - follow-up search",
+            f"Search query: {query}",
+            f"Total comments available: {total_comments}",
+            f"Comments matching keywords: {len(matches)}",
+            "",
+            *lines,
+        ]
+        slug = sanitize_for_filename(query)
+        log_path = output_dir / f"search_{slug}.txt"
+        log_path.write_text("\n".join(log_lines), encoding="utf-8")
+        print(f"Saved search log to {log_path}")
+
+
 def _tokenize(query: str) -> List[tuple[str, bool]]:
     """Split the query into tokens, keeping quoted phrases intact."""
     tokens: List[tuple[str, bool]] = []
@@ -410,26 +458,59 @@ def save_csv(rows: List[Dict[str, Any]], path: Path) -> None:
         writer.writerows(rows)
 
 
-def print_matches(matches: List[Dict[str, Any]], collector: Optional[List[str]] = None) -> None:
-    """Display keyword matches with author and the full comment text."""
-
-    def emit(line: str = "") -> None:
-        if collector is not None:
-            collector.append(line)
-        print(line)
-
+def format_matches(matches: List[Dict[str, Any]]) -> List[str]:
+    """Return formatted lines for matched comments."""
     if not matches:
-        emit()
-        emit("No comments matched the provided keywords.")
-        return
+        return ["No comments matched the provided keywords."]
 
-    emit()
-    emit("Matching comments:")
+    lines = ["Matching comments:"]
     for match in matches:
         snippet = match.get("comment_text", "").strip().replace("\n", " ")
         author = match.get("author") or "Unknown"
         published = match.get("published_at") or "Unknown date"
-        emit(f"- {author} [{published}]: {snippet}")
+        lines.append(f"- {author} [{published}]: {snippet}")
+    return lines
+
+
+def print_matches(matches: List[Dict[str, Any]], collector: Optional[List[str]] = None) -> None:
+    """Display keyword matches with author and the full comment text."""
+    lines = format_matches(matches)
+    if collector is not None:
+        collector.append("")
+        collector.extend(lines)
+
+    print()
+    for line in lines:
+        print(line)
+
+
+def display_lines_paged(lines: List[str]) -> None:
+    """Display lines with a simple prompt-based pager."""
+    if not lines:
+        return
+
+    size = shutil.get_terminal_size(fallback=(80, 24))
+    page_size = max(size.lines - 2, 1)
+    index = 0
+    total = len(lines)
+
+    while index < total:
+        chunk = lines[index : index + page_size]
+        for line in chunk:
+            print(line)
+        index += len(chunk)
+
+        if index >= total:
+            break
+
+        try:
+            response = input("--More-- (Enter to continue, q to quit) ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+
+        if response.startswith("q"):
+            break
 
 
 def main() -> None:
@@ -553,11 +634,7 @@ def main() -> None:
         log_path.write_text("\n".join(report_lines), encoding="utf-8")
         print(f"Saved search log to {log_path}")
 
-    try:
-        os.chdir(output_dir)
-        print(f"\nChanged working directory to {output_dir}")
-    except OSError as err:
-        print(f"\nCould not change directory to {output_dir}: {err}")
+    interactive_search(flat_rows, output_dir, processed)
 
 
 if __name__ == "__main__":
