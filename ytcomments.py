@@ -470,6 +470,7 @@ def format_matches(matches: List[Dict[str, Any]]) -> List[str]:
         author = match.get("author") or "Unknown"
         published = match.get("published_at") or "Unknown date"
         lines.append(f"- {author} [{published}]: {snippet}")
+        lines.append("")
     return lines
 
 
@@ -503,6 +504,8 @@ def display_lines_paged(lines: List[str]) -> None:
     if not lines:
         return
 
+    bold_blue = "\033[1m\033[34m"
+    reset = "\033[0m"
     index = 0
     total = len(lines)
     page = 1
@@ -513,7 +516,8 @@ def display_lines_paged(lines: List[str]) -> None:
             page_size = 5
 
         chunk = lines[index : index + page_size]
-        header = f"-- Results {index + 1}-{index + len(chunk)} of {total} (page {page}) --"
+        header = f"{bold_blue}-- Results {index + 1}-{index + len(chunk)} of {total} (page {page}) --{reset}"
+        print()
         print(header)
         for line in chunk:
             print(line)
