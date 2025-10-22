@@ -1,3 +1,9 @@
 # Generated comment exports (per-video output directories and flat files)
 */comments.csv
 */comments.json
+
+# macOS cruft
+.DS_Store
+
+# Python bytecode
+__pycache__/
