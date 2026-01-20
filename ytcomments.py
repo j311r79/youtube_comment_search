@@ -35,6 +35,8 @@ AUTHOR_KEYS = ("author", "author_text", "username", "user", "channel")
 TEXT_KEYS = ("text", "content", "body", "snippet", "original_text")
 TIME_KEYS = ("time", "published_time", "published_at", "date", "timestamp_text")
 LIKE_KEYS = ("votes", "like_count", "likes", "likeCount", "favorite_count")
+HEART_KEYS = ("heart", "is_hearted", "hearted")
+TIME_PARSED_KEYS = ("time_parsed", "timeParsed", "published_at_unix", "timestamp")
 
 
 def _first_non_empty(
@@ -72,6 +74,57 @@ def _parse_like_count(value: Optional[str]) -> int:
         return 0
 
 
+def _parse_hearted(value: Any) -> bool:
+    """Best-effort parse of creator-hearted flag from various payload shapes."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(int(value))
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in {"1", "true", "yes", "y", "hearted"}:
+            return True
+        if v in {"0", "false", "no", "n"}:
+            return False
+        # Non-empty string: treat as True only if it looks affirmative.
+        return False
+    if isinstance(value, dict):
+        # Some payloads wrap this in a dict. Any explicit truthy flag wins.
+        for k in ("hearted", "is_hearted", "heart"):
+            if k in value:
+                return _parse_hearted(value.get(k))
+        return True  # dict present and no explicit flag: assume heart info exists
+    if isinstance(value, list):
+        return any(_parse_hearted(v) for v in value)
+    return False
+
+
+def _parse_unix_timestamp(value: Optional[str]) -> Optional[int]:
+    """Convert a numeric timestamp-ish field into an int unix timestamp (seconds)."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(value, str):
+        value = str(value)
+    value = value.strip()
+    if not value:
+        return None
+    # Keep digits only (tolerates commas or stray chars)
+    digits = "".join(ch for ch in value if ch.isdigit())
+    if not digits:
+        return None
+    try:
+        return int(digits)
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_replies(raw_comment: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Collect any reply dictionaries present on the raw comment payload."""
     replies: List[Dict[str, Any]] = []
@@ -95,6 +148,8 @@ def normalize_comment(raw_comment: Dict[str, Any], parent_id: Optional[str] = No
     author = _first_non_empty(raw_comment, AUTHOR_KEYS, default="Unknown") or "Unknown"
     text = _first_non_empty(raw_comment, TEXT_KEYS, default="") or ""
     published_at = _first_non_empty(raw_comment, TIME_KEYS, default="") or ""
+    published_at_unix = _parse_unix_timestamp(_first_non_empty(raw_comment, TIME_PARSED_KEYS))
+    is_hearted = _parse_hearted(_first_non_empty(raw_comment, HEART_KEYS))
     like_count = _parse_like_count(_first_non_empty(raw_comment, LIKE_KEYS))
 
     replies = [
@@ -109,6 +164,8 @@ def normalize_comment(raw_comment: Dict[str, Any], parent_id: Optional[str] = No
         "comment_text": text,
         "like_count": like_count,
         "published_at": published_at,
+        "published_at_unix": published_at_unix,
+        "is_hearted": is_hearted,
         "replies": replies,
     }
 
@@ -147,6 +204,8 @@ def iter_flatten_comments(comments: Iterable[Dict[str, Any]]) -> Iterable[Dict[s
             "comment_text": comment.get("comment_text", ""),
             "like_count": comment.get("like_count", 0),
             "published_at": comment.get("published_at", ""),
+            "published_at_unix": comment.get("published_at_unix"),
+            "is_hearted": bool(comment.get("is_hearted", False)),
         }
         for reply in comment.get("replies", []):
             yield from _walk(reply)
@@ -452,7 +511,16 @@ def save_json(comments: List[Dict[str, Any]], path: Path) -> None:
 
 def save_csv(rows: List[Dict[str, Any]], path: Path) -> None:
     """Write the flattened comment data to CSV."""
-    fieldnames = ["comment_id", "parent_id", "author", "comment_text", "like_count", "published_at"]
+    fieldnames = [
+        "comment_id",
+        "parent_id",
+        "author",
+        "comment_text",
+        "like_count",
+        "published_at",
+        "published_at_unix",
+        "is_hearted",
+    ]
     with path.open("w", encoding="utf-8", newline="") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
@@ -603,7 +671,16 @@ def main() -> None:
     total_known = reported_comment_count if reported_comment_count and reported_comment_count > 0 else None
     processed = 0
     with csv_path.open("w", encoding="utf-8", newline="") as csvfile:
-        fieldnames = ["comment_id", "parent_id", "author", "comment_text", "like_count", "published_at"]
+        fieldnames = [
+            "comment_id",
+            "parent_id",
+            "author",
+            "comment_text",
+            "like_count",
+            "published_at",
+            "published_at_unix",
+            "is_hearted",
+        ]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
