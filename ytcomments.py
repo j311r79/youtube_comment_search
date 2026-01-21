@@ -685,7 +685,8 @@ def main() -> None:
         fallback_id = extract_video_id(url)
         safe_dir_name = sanitize_directory_name(f"video_{fallback_id}") if fallback_id else "video"
 
-    output_dir = Path.cwd() / safe_dir_name
+    base_output_dir = Path("/Users/jaysair/Downloads/Youtube Comments")
+    output_dir = base_output_dir / safe_dir_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
     report_lines.append(f"Output directory: {output_dir}")
