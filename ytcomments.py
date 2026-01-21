@@ -145,6 +145,14 @@ def _extract_replies(raw_comment: Dict[str, Any]) -> List[Dict[str, Any]]:
 def normalize_comment(raw_comment: Dict[str, Any], parent_id: Optional[str] = None) -> Dict[str, Any]:
     """Map a raw comment from youtube-comment-downloader to a consistent structure."""
     comment_id = _first_non_empty(raw_comment, COMMENT_ID_KEYS, default="") or ""
+
+    # Prefer structural parent_id passed down from nesting, but fall back to parsing
+    # it from comment_id when replies are emitted as separate rows.
+    if parent_id is None:
+        derived_parent = derive_parent_id_from_comment_id(comment_id)
+        if derived_parent:
+            parent_id = derived_parent
+
     author = _first_non_empty(raw_comment, AUTHOR_KEYS, default="Unknown") or "Unknown"
     text = _first_non_empty(raw_comment, TEXT_KEYS, default="") or ""
     published_at = _first_non_empty(raw_comment, TIME_KEYS, default="") or ""
@@ -300,6 +308,22 @@ def extract_video_id(url: str) -> Optional[str]:
             if len(segments) >= 3 and segments[2]:
                 return segments[2]
     return None
+
+
+def derive_parent_id_from_comment_id(comment_id: str) -> Optional[str]:
+    """Best-effort derive parent_id when the downloader doesn't provide it.
+
+    Some `youtube-comment-downloader` outputs represent reply IDs as:
+        <parentCommentId>.<replyId>
+
+    In those cases, `parent_id` may be missing even though the row is a reply.
+    """
+    if not comment_id:
+        return None
+    if "." not in comment_id:
+        return None
+    parent, _reply = comment_id.split(".", 1)
+    return parent or None
 
 
 def interactive_search(flat_rows: List[Dict[str, Any]], output_dir: Path, total_comments: int) -> None:
