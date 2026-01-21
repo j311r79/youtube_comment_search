@@ -345,9 +345,16 @@ def interactive_search(flat_rows: List[Dict[str, Any]], output_dir: Path, total_
             *lines,
         ]
         slug = sanitize_for_filename(query)
+
+        # Human-readable log
         log_path = output_dir / f"search_{slug}.txt"
         log_path.write_text("\n".join(log_lines), encoding="utf-8")
         print(f"Saved search log to {log_path}")
+
+        # Machine-readable CSV of matched rows
+        results_csv_path = output_dir / f"search_{slug}.csv"
+        save_search_results_csv(matches, results_csv_path)
+        print(f"Saved search results CSV to {results_csv_path}")
 
 
 def _tokenize(query: str) -> List[tuple[str, bool]]:
@@ -527,6 +534,25 @@ def save_csv(rows: List[Dict[str, Any]], path: Path) -> None:
         writer.writerows(rows)
 
 
+def save_search_results_csv(matches: List[Dict[str, Any]], path: Path) -> None:
+    """Write keyword-matched comment rows to a CSV file."""
+    fieldnames = [
+        "comment_id",
+        "parent_id",
+        "author",
+        "comment_text",
+        "like_count",
+        "published_at",
+        "published_at_unix",
+        "is_hearted",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in matches:
+            writer.writerow({key: row.get(key) for key in fieldnames})
+
+
 def format_matches(matches: List[Dict[str, Any]]) -> List[str]:
     """Return formatted lines for matched comments."""
     if not matches:
@@ -584,7 +610,7 @@ def display_lines_paged(lines: List[str]) -> None:
             page_size = 5
 
         chunk = lines[index : index + page_size]
-        header = f"{bold_blue}-- Results {index + 1}-{index + len(chunk)} of {total} (page {page}) --{reset}"
+        header = f"{bold_blue}-- Lines {index + 1}-{index + len(chunk)} of {total} (page {page}) --{reset}"
         print()
         print(header)
         for line in chunk:
@@ -596,7 +622,7 @@ def display_lines_paged(lines: List[str]) -> None:
 
         try:
             response = input(
-                "--More-- (Enter next page, b back, q stop) "
+                "--More-- (Enter next lines, b back, q stop) "
             ).strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
@@ -722,6 +748,31 @@ def main() -> None:
             search_performed = False
 
     if search_performed:
+        # Write search artifacts immediately (before paging output).
+        lines = format_matches(matches)
+        slug = sanitize_for_filename(query)
+
+        # Human-readable log (search-focused)
+        log_lines = [
+            "YouTube Comment Downloader - search",
+            f"Video URL: {url}",
+            title_line,
+            f"Search query: {query}",
+            f"Total comments downloaded: {processed}",
+            f"Comments matching keywords: {len(matches)}",
+            "",
+            *lines,
+        ]
+        log_path = output_dir / f"search_{slug}.txt"
+        log_path.write_text("\n".join(log_lines), encoding="utf-8")
+        print(f"Saved search log to {log_path}")
+
+        # Machine-readable CSV of matched rows
+        results_csv_path = output_dir / f"search_{slug}.csv"
+        save_search_results_csv(matches, results_csv_path)
+        print(f"Saved search results CSV to {results_csv_path}")
+
+        # Now display results
         print_matches(matches, collector=report_lines)
 
     total_line = f"Total comments downloaded: {processed}"
@@ -736,11 +787,6 @@ def main() -> None:
         print("Keyword search skipped.")
         report_lines.append("Keyword search skipped.")
 
-    if search_performed:
-        slug = sanitize_for_filename(query)
-        log_path = output_dir / f"search_{slug}.txt"
-        log_path.write_text("\n".join(report_lines), encoding="utf-8")
-        print(f"Saved search log to {log_path}")
 
     interactive_search(flat_rows, output_dir, processed)
 
